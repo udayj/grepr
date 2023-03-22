@@ -1,7 +1,12 @@
 use clap::{App, Arg};
 use regex::{Regex, RegexBuilder};
-use std::error::Error;
+use std::{
+    error::Error,
+    fs::{self, File},
+    io::{self, BufRead, BufReader}
+};
 use walkdir::{WalkDir, DirEntry};
+
 
 type MyResult<T> = Result<T, Box<dyn Error>>;
 
@@ -15,6 +20,14 @@ pub struct Config {
     invert_match: bool
 }
 
+fn open(filename: &str) -> MyResult<Box<dyn BufRead>> {
+
+    match filename {
+
+        "-" => Ok(Box::new(BufReader::new(io::stdin()))),
+        _ => Ok(Box::new(BufReader::new(File::open(filename)?)))
+    }
+}
 pub fn get_args() -> MyResult<Config> {
 
     let matches = App::new("grepr")
@@ -80,8 +93,64 @@ pub fn get_args() -> MyResult<Config> {
 
 pub fn run(config: Config) -> MyResult<()> {
 
-    println!("{:#?}", config);
+    let entries = find_files(&config.files, config.recursive);
+    let mut prefix = "";
+    let mut internal_str:String;
+    let mut counter = 0;
+    for entry in &entries {
+
+        match entry {
+
+            Err(e) => eprintln!("{}", e),
+            Ok(filename) => {
+                let result = find_lines(open(&filename.as_str()).unwrap(), 
+                                            &config.pattern, config.invert_match)
+                                        .unwrap();
+                counter =result.len();
+                
+                let component:Vec<&str>= filename.as_str().split("/").collect();
+                let exact_filename = component.last().unwrap();
+                if entries.len() > 1 {
+                    internal_str = format!("{}:",filename).to_owned();
+                    prefix = internal_str.as_str();
+                }
+                if (config.count) {
+                    println!("{}{}", prefix, counter);
+                    continue;
+                }
+
+                for match_str in result {
+
+                    println!("{}{}", prefix, match_str);
+                }                    
+        }
+        }
+    }
     Ok(())
+}
+
+fn find_lines<T: BufRead> (
+    mut file: T,
+    pattern: &Regex,
+    invert_match: bool
+) -> MyResult<Vec<String>> {
+
+    let mut result = vec![];
+    for line in file.lines() {
+
+        let actual_line = line.unwrap();
+
+        if pattern.is_match(&actual_line.as_str()) && !invert_match {
+
+            result.push(actual_line);
+        }
+
+        else if !pattern.is_match(&actual_line.as_str()) && invert_match {
+
+            result.push(actual_line);            
+        }
+    }
+    Ok(result)
 }
 
 fn find_files(paths: &[String], recursive: bool) -> Vec<MyResult<String>> {
@@ -99,7 +168,7 @@ fn find_files(paths: &[String], recursive: bool) -> Vec<MyResult<String>> {
                 Ok(val) => {
                     
                     if !recursive && val.file_type().is_dir() {
-                        result.push(Err(String::from(format!("{} is a directory", val.path().to_str().unwrap()))));
+                        result.push(Err(From::from(format!("{} is a directory", val.path().to_str().unwrap()))));
                         break;
                     }
                     if !val.file_type().is_dir()  {
